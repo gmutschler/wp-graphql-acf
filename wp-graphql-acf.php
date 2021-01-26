@@ -26,6 +26,7 @@ require_once( __DIR__ . '/vendor/autoload.php' );
  * Define constants
  */
 const WPGRAPHQL_REQUIRED_MIN_VERSION = '0.4.0';
+const WPGRAPHQL_ACF_VERSION = '0.4.1';
 
 /**
  * Initialize the plugin
@@ -111,3 +112,25 @@ function can_load_plugin() {
 
 	return true;
 }
+
+/**
+ * Compare the old version and run version migration code
+ * 
+ * @since 0.4.1
+ */
+function run_version_upgrade() {
+	/**
+	 * Get the old version string
+	 */
+	$prev_version = get_option( 'wp_graphql_acf_version' );
+
+	/**
+	 * If the old version is under 0.4.1, run migration code
+	 */
+	if ( empty( $prev_version ) || version_compare( $prev_version, '0.4.1', '<' ) ) {
+		\WPGraphQL\ACF\Config::auto_update_field_groups();
+	}
+
+	update_option( 'wp_graphql_acf_version', WPGRAPHQL_ACF_VERSION );
+}
+register_activation_hook( __FILE__, __NAMESPACE__ . '\run_version_upgrade' );

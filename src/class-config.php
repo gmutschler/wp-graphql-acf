@@ -30,6 +30,11 @@ class Config {
 	protected $registered_field_names;
 
 	/**
+	 * @var array <string> List of options page slugs registered to the Schema
+	 */
+	protected $registered_options_pages = [];
+
+	/**
 	 * Initialize WPGraphQL to ACF
 	 *
 	 * @param \WPGraphQL\Registry\TypeRegistry $type_registry Instance of the WPGraphQL TypeRegistry
@@ -44,15 +49,7 @@ class Config {
 		/**
 		 * Add ACF Fields to GraphQL Types
 		 */
-		$this->add_acf_fields_to_post_object_types();
-		$this->add_acf_fields_to_term_objects();
-		$this->add_acf_fields_to_comments();
-		$this->add_acf_fields_to_menus();
-		$this->add_acf_fields_to_menu_items();
-		$this->add_acf_fields_to_media_items();
-		$this->add_acf_fields_to_individual_posts();
-		$this->add_acf_fields_to_users();
-		$this->add_acf_fields_to_options_pages();
+		$this->add_acf_fields_to_graphql_types();
 
 		// This filter tells WPGraphQL to resolve revision meta for ACF fields from the revision's meta, instead
 		// of the parent (published post) meta.
@@ -166,77 +163,6 @@ class Config {
 		$str = lcfirst( $str );
 
 		return $str;
-	}
-
-	/**
-	 * Add ACF Fields to Post Object Types.
-	 *
-	 * This gets the Post Types that are configured to show_in_graphql and iterates
-	 * over them to expose ACF Fields to their Type in the GraphQL Schema.
-	 */
-	protected function add_acf_fields_to_post_object_types() {
-
-		/**
-		 * Get a list of post types that have been registered to show in graphql
-		 */
-		$graphql_post_types = get_post_types( [ 'show_in_graphql' => true ] );
-
-		/**
-		 * If there are no post types exposed to GraphQL, bail
-		 */
-		if ( empty( $graphql_post_types ) || ! is_array( $graphql_post_types ) ) {
-			return;
-		}
-
-		/**
-		 * Loop over the post types exposed to GraphQL
-		 */
-		foreach ( $graphql_post_types as $post_type ) {
-
-			/**
-			 * Get the field groups associated with the post type
-			 */
-			$field_groups = acf_get_field_groups(
-				[
-					'post_type' => $post_type,
-				]
-			);
-
-			/**
-			 * If there are no field groups for this post type, move on to the next one.
-			 */
-			if ( empty( $field_groups ) || ! is_array( $field_groups ) ) {
-				continue;
-			}
-
-			/**
-			 * Get the post_type_object
-			 */
-			$post_type_object = get_post_type_object( $post_type );
-
-			/**
-			 * Loop over the field groups for this post type
-			 */
-			foreach ( $field_groups as $field_group ) {
-
-				$field_name = isset( $field_group['graphql_field_name'] ) ? $field_group['graphql_field_name'] : Config::camel_case( $field_group['title'] );
-
-				$field_group['type'] = 'group';
-				$field_group['name'] = $field_name;
-				$config              = [
-					'name'            => $field_name,
-					'description'     => $field_group['description'],
-					'acf_field'       => $field_group,
-					'acf_field_group' => null,
-					'resolve'         => function( $root ) use ( $field_group ) {
-						return isset( $root ) ? $root : null;
-					}
-				];
-
-				$this->register_graphql_field( $post_type_object->graphql_single_name, $field_name, $config );
-			}
-		}
-
 	}
 
 	/**
@@ -571,7 +497,7 @@ class Config {
 					} else {
 						$type_names = [];
 						foreach ( $acf_field['post_type'] as $post_type ) {
-							if ( in_array( $post_type, \get_post_types( [ 'show_in_graphql' => true ]), true ) ) {
+							if ( in_array( $post_type, \get_post_types( [ 'show_in_graphql' => true ] ), true ) ) {
 								$type_names[ $post_type ] = get_post_type_object( $post_type )->graphql_single_name;
 							}
 						}
@@ -608,7 +534,7 @@ class Config {
 						$return = [];
 						if ( ! empty( $value ) ) {
 							if ( is_array( $value ) ) {
-								foreach ($value as $id ) {
+								foreach ( $value as $id ) {
 									$post = get_post( $id );
 									if ( ! empty( $post ) ) {
 										$return[] = new Post( $post );
@@ -736,7 +662,7 @@ class Config {
 						$return = [];
 						if ( ! empty( $value ) ) {
 							if ( is_array( $value ) ) {
-								foreach ($value as $id ) {
+								foreach ( $value as $id ) {
 									$user = get_user_by( 'id', $id );
 									if ( ! empty( $user ) ) {
 										$user = new User( $user );
@@ -778,7 +704,7 @@ class Config {
 					}
 				}
 
-				$is_multiple = isset($acf_field['field_type']) && in_array( $acf_field['field_type'], array('checkbox', 'multi_select'));
+				$is_multiple = isset( $acf_field['field_type'] ) && in_array( $acf_field['field_type'], array( 'checkbox', 'multi_select' ) );
 
 				$field_config = [
 					'type'    => $is_multiple ? ['list_of' => $type ] : $type,
@@ -865,7 +791,7 @@ class Config {
 
 				// ACF 5.8.6 added more data to Google Maps field value
 				// https://www.advancedcustomfields.com/changelog/
-				if (\acf_version_compare(acf_get_db_version(), '>=', '5.8.6')) {
+				if ( \acf_version_compare(acf_get_db_version(), '>=', '5.8.6' ) ) {
                     $fields += [
                         'streetName' => [
 							'type'        => 'String',
@@ -1175,51 +1101,378 @@ class Config {
 	}
 
 	/**
-	 * Add field groups to Taxonomies
-	 *
-	 * @return void
+	 * Returns all available GraphQL Types
 	 */
-	protected function add_acf_fields_to_term_objects() {
+	public static function get_all_graphql_types() {
+		$graphql_types = array();
 
 		/**
-		 * Get a list of taxonomies that have been registered to show in graphql
+		 * Add post types exposed to GraphQL to GraphQL types
+		 */
+		$graphql_post_types = get_post_types( ['show_in_graphql' => true] );
+
+		if ( ! empty( $graphql_post_types ) && is_array( $graphql_post_types ) ) {
+
+			/**
+			 * Prepare type key prefix and label surfix
+			 */
+			$key_prefix = 'post_type__';
+			$label_surfix = ' (' . __( 'Post Type', 'wp-graphql-acf' ) . ')';
+
+			/**
+			 * Loop over the post types exposed to GraphQL
+			 */
+			foreach ( $graphql_post_types as $post_type ) {
+
+				/**
+				 * Get the post_type_object
+				 */
+				$post_type_object = get_post_type_object( $post_type );
+
+				$type_label = $post_type_object->labels->singular_name . $label_surfix;
+				$type_key = $key_prefix . $post_type;
+
+				$graphql_types[$type_key] = $type_label;
+			}
+		}
+
+		/**
+		 * Add taxonomies to GraphQL types
 		 */
 		$graphql_taxonomies = \WPGraphQL::get_allowed_taxonomies();
 
+		if ( ! empty( $graphql_taxonomies ) && is_array( $graphql_taxonomies ) ) {
+
+			/**
+			 * Prepare type key prefix and label surfix
+			 */
+			$key_prefix = 'taxonomy__';
+			$label_surfix = ' (' . __( 'Taxonomy', 'wp-graphql-acf' ) . ')';
+
+			/**
+			 * Loop over the taxonomies exposed to GraphQL
+			 */
+			foreach ( $graphql_taxonomies as $taxonomy ) {
+				/**
+				 * Get the Taxonomy object
+				 */
+				$tax_object = get_taxonomy( $taxonomy );
+				$type_label = $tax_object->labels->singular_name . $label_surfix;
+				$type_key = $key_prefix . $taxonomy;
+
+				$graphql_types[$type_key] = $type_label;
+			}
+		}
+
 		/**
-		 * If there are no taxonomies exposed to GraphQL, bail
+		 * Add comment to GraphQL types
 		 */
-		if ( empty( $graphql_taxonomies ) || ! is_array( $graphql_taxonomies ) ) {
+		$graphql_types['comment'] = __( 'Comment', 'wp-graphql-acf' );
+
+		/**
+		 * Add menu to GraphQL types
+		 */
+		$graphql_types['menu'] = __( 'Menu', 'wp-graphql-acf' );
+
+		/**
+		 * Add menu items to GraphQL types
+		 */
+		$graphql_types['menu_item'] = __( 'Menu Item', 'wp-graphql-acf' );
+
+		/**
+		 * Add media items to GraphQL types
+		 */
+		$graphql_types['media_item'] = __( 'Media Item', 'wp-graphql-acf' );
+
+		/**
+		 * Add users to GraphQL types
+		 */
+		$graphql_types['user'] = __( 'User', 'wp-graphql-acf' );
+
+		/**
+		 * Add options pages to GraphQL types
+		 */
+		global $acf_options_page;
+		if ( isset( $acf_options_page ) ) {
+			/**
+			 * Get a list of post types that have been registered to show in graphql
+			 */
+			$graphql_options_pages = acf_get_options_pages();
+
+			/**
+			 * If there are no post types exposed to GraphQL, bail
+			 */
+			if ( ! empty( $graphql_options_pages ) && is_array( $graphql_options_pages ) ) {
+
+				/**
+				 * Prepare type key prefix and label surfix
+				 */
+				$key_prefix = 'acf_options_page__';
+				$label_surfix = ' (' . __( 'ACF Options Page', 'wp-graphql-acf' ) . ')';
+
+				/**
+				 * Loop over the post types exposed to GraphQL
+				 */
+				foreach ( $graphql_options_pages as $options_page_key => $options_page ) {
+					if ( empty( $options_page['show_in_graphql'] ) ) {
+						continue;
+					}
+
+					/**
+					 * Get options page properties.
+					 */
+					$page_title = $options_page['page_title'];
+					$page_slug  = $options_page['menu_slug'];
+
+					$type_label = $page_title . $label_surfix;
+					$type_key = $key_prefix . $page_slug;
+
+					$graphql_types[$type_key] = $type_label;
+				}
+			}
+		}
+
+		return $graphql_types;
+	}
+
+	/**
+	 * Adds acf field groups to GraphQL types.
+	 */
+	protected function add_acf_fields_to_graphql_types() {
+		/**
+		 * Get all the field groups
+		 */
+		$field_groups = acf_get_field_groups();
+
+		/**
+		 * If there are no acf field groups, bail
+		 */
+		if ( empty( $field_groups ) || ! is_array( $field_groups ) ) {
 			return;
 		}
 
 		/**
-		 * Loop over the taxonomies exposed to GraphQL
+		 * Loop over all the field groups
 		 */
-		foreach ( $graphql_taxonomies as $taxonomy ) {
+		foreach ( $field_groups as $field_group ) {
 
 			/**
-			 * Get the field groups associated with the taxonomy
+			 * If there are no graphql types on for this field groups, move on to the next one.
 			 */
-			$field_groups = acf_get_field_groups(
-				[
-					'taxonomy' => $taxonomy,
-				]
-			);
-
-			/**
-			 * If there are no field groups for this taxonomy, move on to the next one.
-			 */
-			if ( empty( $field_groups ) || ! is_array( $field_groups ) ) {
+			if ( empty( $field_group['graphql_types_on'] ) || ! is_array( $field_group['graphql_types_on'] ) ) {
 				continue;
 			}
 
 			/**
-			 * Get the Taxonomy object
+			 * Prepare default info
 			 */
-			$tax_object = get_taxonomy( $taxonomy );
+			$field_name = isset( $field_group['graphql_field_name'] ) ? $field_group['graphql_field_name'] : Config::camel_case( $field_group['title'] );
+			$field_group['type'] = 'group';
+			$field_group['name'] = $field_name;
+			$config              = [
+				'name'            => $field_name,
+				'acf_field'       => $field_group,
+				'acf_field_group' => null,
+				'resolve'         => function ( $root ) use ( $field_group ) {
+					return isset( $root ) ? $root : null;
+				}
+			];
+			$default_description = $field_group['description'] ? $field_group['description'] . ' | ' : '';
 
-			if ( empty( $tax_object ) || ! isset( $tax_object->graphql_single_name ) ) {
+			/**
+			 * Loop over the GraphQL types for this field group on
+			 */
+			foreach ( $field_group['graphql_types_on'] as $graphql_type ) {
+
+				/**
+				 * Set type_name and description by graphql_type
+				 */
+				$type_pieces = explode( '__', $graphql_type );
+				switch ( $type_pieces[0] ) {
+					case 'post_type':
+						/**
+						 * Get the Post Type name
+						 */
+						$post_type = substr( $graphql_type, strlen( 'post_type__' ) );
+
+						/**
+						 * Get the post_type_object
+						 */
+						$post_type_object = get_post_type_object( $post_type );
+
+						if ( empty( $post_type_object ) || ! isset( $post_type_object->graphql_single_name ) ) {
+							continue 2;
+						}
+
+						$type_name = $post_type_object->graphql_single_name;
+						$config['description'] = $field_group['description'];
+						break;
+
+					case 'taxonomy':
+						/**
+						 * Get the Taxonomy name
+						 */
+						$taxonomy = substr( $graphql_type, strlen( 'taxonomy__' ) );
+
+						/**
+						 * Get the Taxonomy object
+						 */
+						$tax_object = get_taxonomy( $taxonomy );
+
+						if ( empty( $tax_object ) || ! isset( $tax_object->graphql_single_name ) ) {
+							continue 2;
+						}
+
+						$type_name = $tax_object->graphql_single_name;
+						$config['description'] = $default_description . sprintf( __( 'Added to the GraphQL Schema because the ACF Field Group "%1$s" was assigned to the "%2$s" taxonomy', 'wp-graphql-acf' ), $field_group['title'], $tax_object->name );
+						break;
+
+					case 'comment':
+						$type_name = 'Comment';
+						$config['description'] = $default_description . sprintf( __( 'Added to the GraphQL Schema because the ACF Field Group "%s" was assigned to Comments', 'wp-graphql-acf' ), $field_group['title'] );
+						break;
+
+					case 'menu':
+						$type_name = 'Menu';
+						$config['description'] = $default_description . sprintf( __( 'Added to the GraphQL Schema because the ACF Field Group "%s" was assigned to Menus', 'wp-graphql-acf' ), $field_group['title'] );
+						break;
+
+					case 'menu_item':
+						$type_name = 'MenuItem';
+						$config['description'] = $default_description . sprintf( __( 'Added to the GraphQL Schema because the ACF Field Group "%s" was assigned to Menu Items', 'wp-graphql-acf' ), $field_group['title'] );
+						break;
+
+					case 'media_item':
+						$type_name = 'MediaItem';
+						$config['description'] = $default_description . sprintf( __( 'Added to the GraphQL Schema because the ACF Field Group "%s" was assigned to attachments', 'wp-graphql-acf' ), $field_group['title'] );
+						break;
+
+					case 'user':
+						$type_name = 'User';
+						$config['description'] = $default_description . sprintf( __( 'Added to the GraphQL Schema because the ACF Field Group "%1$s" was assigned to Users edit or register form', 'wp-graphql-acf' ), $field_group['title'] );
+						break;
+
+					case 'acf_options_page':
+						/**
+						 * Get options page slug
+						 */
+						$page_slug = substr( $graphql_type, strlen( 'acf_options_page__' ) );
+
+						/**
+						 * Get options page object
+						 */
+						$options_page = acf_get_options_page( $page_slug );
+
+						if ( empty( $options_page['show_in_graphql'] ) ) {
+							continue 2;
+						}
+
+						/**
+						 * Get options page properties.
+						 */
+						$page_title = $options_page['page_title'];
+
+						/**
+						 * Create field and type names. Use explicit graphql_field_name
+						 * if available and fallback to generating from title if not available.
+						 */
+						if ( ! empty( $options_page['graphql_field_name'] ) ) {
+							$page_field_name = $options_page['graphql_field_name'];
+							$type_name = ucfirst( $options_page['graphql_field_name'] );
+						} else {
+							$page_field_name = Config::camel_case( $page_title );
+							$type_name = ucfirst( Config::camel_case( $page_title ) );
+						}
+
+						$config['description'] = $field_group['description'];
+
+						/**
+						 * Register options pages as graphql object type if not registered before
+						 */
+						if ( ! in_array( $page_slug, $this->registered_options_pages ) ) {
+							/**
+							 * Register options page type to schema.
+							 */
+							register_graphql_object_type(
+								$type_name,
+								[
+									'description' => sprintf( __( '%s options', 'wp-graphql-acf' ), $page_title ),
+									'fields'      => [
+										'pageTitle' => [
+											'type'    => 'String',
+											'resolve' => function ( $source ) use ( $page_title ) {
+												return ! empty( $page_title ) ? $page_title : null;
+											},
+										],
+										'pageSlug' => [
+											'type'    => 'String',
+											'resolve' => function ( $source ) use ( $page_slug ) {
+												return ! empty( $page_slug ) ? $page_slug : null;
+											},
+										],
+									],
+								]
+							);
+
+							/**
+							 * Register options page type to the "RootQuery"
+							 */
+							$options_page['type'] = 'options_page';
+							register_graphql_field(
+								'RootQuery',
+								$page_field_name,
+								[
+									'type'        => $type_name,
+									'description' => sprintf( __( '%s options', 'wp-graphql-acf' ), $options_page['page_title'] ),
+									'resolve'     => function () use ( $options_page ) {
+										return ! empty( $options_page ) ? $options_page : null;
+									}
+								]
+							);
+
+							/**
+							 * Mark current page as restered by adding to registered page list
+							 */
+							$this->registered_options_pages[] = $page_slug;
+						}
+
+						break;
+
+					default:
+						continue 2;
+				}
+
+				$this->register_graphql_field( $type_name, $field_name, $config );
+			}
+		}
+	}
+
+	/**
+	 * Update field groups with graphql_types_on field
+	 * Used when upgrading version from under 0.4.1 to above
+	 *
+	 * @since 0.4.1
+	 */
+	public static function auto_update_field_groups() {
+
+		// Get all field groups
+		$all_field_groups = acf_get_field_groups();
+
+		// Init GraphQL field groups
+		$graphql_field_groups = array();
+
+		/**
+		 * Function to push graphql_type_key field group
+		 *
+		 * @param array $field_groups Field group to push the key
+		 * @param string $graphql_type_key GraphQL type key to push
+		 */
+		$func_push_type_key = function ( $field_groups, $graphql_type_key ) use ( &$graphql_field_groups ) {
+
+			/**
+			 * If there are no field groups for this post type, move on to the next one.
+			 */
+			if ( empty( $field_groups ) || ! is_array( $field_groups ) ) {
 				return;
 			}
 
@@ -1227,314 +1480,114 @@ class Config {
 			 * Loop over the field groups for this post type
 			 */
 			foreach ( $field_groups as $field_group ) {
+				$field_group_id = $field_group['ID'];
 
-				$field_name = isset( $field_group['graphql_field_name'] ) ? $field_group['graphql_field_name'] : Config::camel_case( $field_group['title'] );
+				/**
+				 * Add field group to if field group exists in graphql_field_groups array
+				 */
+				if ( ! array_key_exists( $field_group_id, $graphql_field_groups ) ) {
+					$graphql_field_groups[$field_group_id] = $field_group;
+				}
 
-				$field_group['type'] = 'group';
-				$field_group['name'] = $field_name;
-				$description         = $field_group['description'] ? $field_group['description'] . ' | ' : '';
-				$config              = [
-					'name'            => $field_name,
-					'description'     => $description . sprintf( __( 'Added to the GraphQL Schema because the ACF Field Group "%1$s" was assigned to the "%2$s" taxonomy', 'wp-graphql-acf' ), $field_group['title'], $tax_object->name ),
-					'acf_field'       => $field_group,
-					'acf_field_group' => null,
-					'resolve'         => function( $root ) use ( $field_group ) {
-						return isset( $root ) ? $root : null;
-					}
-				];
+				/**
+				 * Init graphql_types_on field
+				 */
+				if ( ! isset( $graphql_field_groups[$field_group_id]['graphql_types_on'] ) ) {
+					$graphql_field_groups[$field_group_id]['graphql_types_on'] = array();
+				}
 
-				$this->register_graphql_field( $tax_object->graphql_single_name, $field_name, $config );
+				/**
+				 * Push the type key to the array
+				 */
+				if ( ! in_array( $graphql_type_key, $graphql_field_groups[$field_group_id]['graphql_types_on'] ) ) {
+					$graphql_field_groups[$field_group_id]['graphql_types_on'][] = $graphql_type_key;
+				}
 			}
-		}
-	}
-
-	/**
-	 * Add ACF Fields to comments
-	 *
-	 * @return void
-	 */
-	protected function add_acf_fields_to_comments() {
-
-		$comment_field_groups = [];
+		};
 
 		/**
-		 * Get the field groups associated with the taxonomy
+		 * Handle Post Types
 		 */
-		$field_groups = acf_get_field_groups();
+		// Get a list of post types that have been registered to show in graphql
+		$graphql_post_types = get_post_types( ['show_in_graphql' => true] );
 
-		foreach ( $field_groups as $field_group ) {
-			if ( ! empty( $field_group['location'] ) && is_array( $field_group['location'] ) ) {
-				foreach ( $field_group['location'] as $locations ) {
-					if ( ! empty( $locations ) && is_array( $locations ) ) {
-						foreach ( $locations as $location ) {
-							if ( 'comment' === $location['param'] && '!=' === $location['operator'] ) {
-								continue;
-							}
-							if ( 'comment' === $location['param'] && '==' === $location['operator'] ) {
-								$comment_field_groups[] = $field_group;
-							}
-						}
-					}
-				}
+		// If there are no post types exposed to GraphQL, bail
+		if ( ! empty( $graphql_post_types ) && is_array( $graphql_post_types ) ) {
+
+			// Loop over the post types exposed to GraphQL
+			foreach ( $graphql_post_types as $post_type ) {
+				$field_groups = acf_get_field_groups( array( 'post_type' => $post_type ) );
+
+				$func_push_type_key( $field_groups, 'post_type__' . $post_type );
 			}
 		}
 
-		if ( empty( $comment_field_groups ) ) {
-			return;
-		}
-
 		/**
-		 * Loop over the field groups for this post type
+		 * Handle Taxonomies
 		 */
-		foreach ( $comment_field_groups as $field_group ) {
+		// Get a list of taxonomies that have been registered to show in graphql
+		$graphql_taxonomies = \WPGraphQL::get_allowed_taxonomies();
 
-			$field_name = isset( $field_group['graphql_field_name'] ) ? $field_group['graphql_field_name'] : Config::camel_case( $field_group['title'] );
+		if ( ! empty( $graphql_taxonomies ) && is_array( $graphql_taxonomies ) ) {
 
-			$field_group['type'] = 'group';
-			$field_group['name'] = $field_name;
-			$description         = $field_group['description'] ? $field_group['description'] . ' | ' : '';
-			$config              = [
-				'name'            => $field_name,
-				'description'     => $description . sprintf( __( 'Added to the GraphQL Schema because the ACF Field Group "%s" was assigned to Comments', 'wp-graphql-acf' ), $field_group['title'] ),
-				'acf_field'       => $field_group,
-				'acf_field_group' => null,
-				'resolve'         => function( $root ) use ( $field_group ) {
-					return isset( $root ) ? $root : null;
-				}
-			];
-
-			$this->register_graphql_field( 'Comment', $field_name, $config );
-
-		}
-
-	}
-
-	/**
-	 * Add Fields to Menus in the GraphQL Schema
-	 *
-	 * @return void
-	 */
-	protected function add_acf_fields_to_menus() {
-
-		$menu_field_groups = [];
-
-		/**
-		 * Get the field groups associated with the taxonomy
-		 */
-		$field_groups = acf_get_field_groups();
-
-		foreach ( $field_groups as $field_group ) {
-			if ( ! empty( $field_group['location'] ) && is_array( $field_group['location'] ) ) {
-				foreach ( $field_group['location'] as $locations ) {
-					if ( ! empty( $locations ) && is_array( $locations ) ) {
-						foreach ( $locations as $location ) {
-							if ( 'nav_menu' === $location['param'] && '!=' === $location['operator'] ) {
-								continue;
-							}
-							if ( 'nav_menu' === $location['param'] && '==' === $location['operator'] ) {
-								$menu_field_groups[] = $field_group;
-								break;
-							}
-						}
-					}
-				}
+			// Loop over the taxonomies exposed to GraphQL
+			foreach ( $graphql_taxonomies as $taxonomy ) {
+				$field_groups = acf_get_field_groups( array( 'taxonomy' => $taxonomy ) );
+				$func_push_type_key( $field_groups, 'taxonomy__' . $taxonomy );
 			}
 		}
 
-		if ( empty( $menu_field_groups ) ) {
-			return;
-		}
-
 		/**
-		 * Loop over the field groups for this post type
+		 * Handle Comment, Menus, Menu Items, Media Items and Individual Posts
 		 */
-		foreach ( $menu_field_groups as $field_group ) {
+		// Init field group variables for comment, menu_field, menu_item and media_item
+		$comment_field_groups = array();
+		$menu_field_groups = array();
+		$menu_item_field_groups = array();
+		$media_item_field_groups = array();
 
-			$field_name = isset( $field_group['graphql_field_name'] ) ? $field_group['graphql_field_name'] : Config::camel_case( $field_group['title'] );
-
-			$field_group['type'] = 'group';
-			$field_group['name'] = $field_name;
-			$description         = $field_group['description'] ? $field_group['description'] . ' | ' : '';
-			$config              = [
-				'name'            => $field_name,
-				'description'     => $description . sprintf( __( 'Added to the GraphQL Schema because the ACF Field Group "%s" was assigned to Menus', 'wp-graphql-acf' ), $field_group['title'] ),
-				'acf_field'       => $field_group,
-				'acf_field_group' => null,
-				'resolve'         => function( $root ) use ( $field_group ) {
-					return isset( $root ) ? $root : null;
-				}
-			];
-
-			$this->register_graphql_field( 'Menu', $field_name, $config );
-
-		}
-
-	}
-
-	/**
-	 * Add ACF Field Groups to Menu Items
-	 *
-	 * @return void
-	 */
-	protected function add_acf_fields_to_menu_items() {
-
-		$menu_item_field_groups = [];
-
-		/**
-		 * Get the field groups associated with the taxonomy
-		 */
-		$field_groups = acf_get_field_groups();
-		foreach ( $field_groups as $field_group ) {
-			if ( ! empty( $field_group['location'] ) && is_array( $field_group['location'] ) ) {
-				foreach ( $field_group['location'] as $locations ) {
-					if ( ! empty( $locations ) && is_array( $locations ) ) {
-						foreach ( $locations as $location ) {
-							if ( 'nav_menu_item' === $location['param'] && '!=' === $location['operator'] ) {
-								continue;
-							}
-							if ( 'nav_menu_item' === $location['param'] && '==' === $location['operator'] ) {
-								$menu_item_field_groups[] = $field_group;
-							}
-						}
-					}
-				}
-			}
-		}
-
-		if ( empty( $menu_item_field_groups ) ) {
-			return;
-		}
-
-		/**
-		 * Loop over the field groups for this post type
-		 */
-		foreach ( $menu_item_field_groups as $field_group ) {
-
-			$field_name = isset( $field_group['graphql_field_name'] ) ? $field_group['graphql_field_name'] : Config::camel_case( $field_group['title'] );
-
-			$field_group['type'] = 'group';
-			$field_group['name'] = $field_name;
-			$description         = $field_group['description'] ? $field_group['description'] . ' | ' : '';
-			$config              = [
-				'name'            => $field_name,
-				'description'     => $description . sprintf( __( 'Added to the GraphQL Schema because the ACF Field Group "%s" was assigned to Menu Items', 'wp-graphql-acf' ), $field_group['title'] ),
-				'acf_field'       => $field_group,
-				'acf_field_group' => null,
-				'resolve'         => function( $root ) use ( $field_group ) {
-					return isset( $root ) ? $root : null;
-				}
-			];
-
-			$this->register_graphql_field( 'MenuItem', $field_name, $config );
-
-		}
-	}
-
-	/**
-	 * Add ACF Field Groups to Media Items (attachments)
-	 *
-	 * @return void
-	 */
-	protected function add_acf_fields_to_media_items() {
-
-		$media_item_field_groups = [];
-
-		/**
-		 * Get the field groups associated with the taxonomy
-		 */
-		$field_groups = acf_get_field_groups();
-
-		foreach ( $field_groups as $field_group ) {
-			if ( ! empty( $field_group['location'] ) && is_array( $field_group['location'] ) ) {
-				foreach ( $field_group['location'] as $locations ) {
-					if ( ! empty( $locations ) && is_array( $locations ) ) {
-						foreach ( $locations as $location ) {
-							if ( 'attachment' === $location['param'] && '!=' === $location['operator'] ) {
-								continue;
-							}
-							if ( 'attachment' === $location['param'] && '==' === $location['operator'] ) {
-								$media_item_field_groups[] = $field_group;
-							}
-						}
-					}
-				}
-			}
-		}
-
-		if ( empty( $media_item_field_groups ) ) {
-			return;
-		}
-
-		/**
-		 * Loop over the field groups for this post type
-		 */
-		foreach ( $media_item_field_groups as $field_group ) {
-
-			$field_name = isset( $field_group['graphql_field_name'] ) ? $field_group['graphql_field_name'] : Config::camel_case( $field_group['title'] );
-
-			$field_group['type'] = 'group';
-			$field_group['name'] = $field_name;
-			$description         = $field_group['description'] ? $field_group['description'] . ' | ' : '';
-			$config              = [
-				'name'            => $field_name,
-				'description'     => $description . sprintf( __( 'Added to the GraphQL Schema because the ACF Field Group "%s" was assigned to attachments', 'wp-graphql-acf' ), $field_group['title'] ),
-				'acf_field'       => $field_group,
-				'acf_field_group' => null,
-				'resolve'         => function( $root ) use ( $field_group ) {
-					return isset( $root ) ? $root : null;
-				}
-			];
-
-			$this->register_graphql_field( 'MediaItem', $field_name, $config );
-
-		}
-	}
-
-	protected function add_acf_fields_to_individual_posts() {
-
-		$post_field_groups = [];
-
-		/**
-		 * Get the field groups associated with the taxonomy
-		 */
-		$field_groups = acf_get_field_groups();
-
+		// Init field group variable for individual posts
 		$allowed_post_types = get_post_types( [
 			'show_ui'         => true,
 			'show_in_graphql' => true
 		] );
 
-		/**
-		 * Remove the `attachment` post_type, as it's treated special and we don't
-		 * want to add field groups in the same way we do for other post types
-		 */
+		// Remove the `attachment` post_type, as it's treated special and we don't
+		// want to add field groups in the same way we do for other post types
 		unset( $allowed_post_types['attachment'] );
 
+		$individual_post_groups = array_fill_keys( $allowed_post_types, array() );
 
-		foreach ( $field_groups as $field_group ) {
+		foreach ( $all_field_groups as $field_group ) {
 			if ( ! empty( $field_group['location'] ) && is_array( $field_group['location'] ) ) {
 				foreach ( $field_group['location'] as $locations ) {
 					if ( ! empty( $locations ) && is_array( $locations ) ) {
 						foreach ( $locations as $location ) {
+							if ( '==' === $location['operator'] ) {
 
-							/**
-							 * If the operator is not equal to, we don't need to do anything,
-							 * so we can just continue
-							 */
-							if ( '!=' === $location['operator'] ) {
-								continue;
-							}
+								switch ( $location['param'] ) {
+									case 'comment':
+										$comment_field_groups[] = $field_group;
+										break;
 
-							/**
-							 * If the param (the post_type) is in the array of allowed_post_types
-							 */
-							if ( in_array( $location['param'], $allowed_post_types, true ) && '==' === $location['operator'] ) {
+									case 'nav_menu':
+										$menu_field_groups[] = $field_group;
+										break;
 
-								$post_field_groups[] = [
-									'type'        => $location['param'],
-									'field_group' => $field_group,
-									'post_id'     => $location['value']
-								];
+									case 'nav_menu_item':
+										$menu_item_field_groups[] = $field_group;
+										break;
+
+									case 'attachment':
+										$media_item_field_groups[] = $field_group;
+										break;
+									
+									default:
+										if ( in_array( $location['param'], $allowed_post_types, true ) ) {
+											$individual_post_groups[$location['param']][] = $field_group;
+										}
+										break;
+								}
 							}
 						}
 					}
@@ -1542,246 +1595,74 @@ class Config {
 			}
 		}
 
+		// Push comment, menu_field, menu_item and media_item keys
+		$func_push_type_key( $comment_field_groups, 'comment' );
+		$func_push_type_key( $menu_field_groups, 'menu' );
+		$func_push_type_key( $menu_item_field_groups, 'menu_item' );
+		$func_push_type_key( $media_item_field_groups, 'media_item' );
 
-		/**
-		 * If no field groups are assigned to a specific post, we don't need to modify the Schema
-		 */
-		if ( empty( $post_field_groups ) ) {
-			return;
+		// Push individual post keys
+		foreach ( $individual_post_groups as $post_type => $field_groups ) {
+			$func_push_type_key( $field_groups, 'post_type__' . $post_type );
 		}
 
 		/**
-		 * Loop over the field groups assigned to a specific post
-		 * and register them to the Schema
+		 * Handle Users
 		 */
-		foreach ( $post_field_groups as $key => $group ) {
+		// Get the field groups associated with the User edit form
+		$user_edit_field_groups = acf_get_field_groups(
+			[
+				'user_form' => 'edit',
+ 			]
+ 		);
 
-			if ( empty( $group['field_group'] ) || ! is_array( $group['field_group'] ) ) {
-				continue;
-			}
+		// Get the field groups associated with the User register form
+		$user_register_field_groups = acf_get_field_groups(
+			[
+				'user_form' => 'register',
+			]
+		);
 
-			$post_object = get_post( (int) $group['post_id'] );
-
-			$allowed_post_types = get_post_types( [ 'show_in_graphql' => true ] );
-			if ( ! $post_object instanceof \WP_Post || ! in_array( $post_object->post_type, $allowed_post_types, true ) ) {
-				continue;
-			}
-
-			$field_group      = $group['field_group'];
-			$post_type_object = get_post_type_object( $post_object->post_type );
-
-
-			$field_name = isset( $field_group['graphql_field_name'] ) ? $field_group['graphql_field_name'] : Config::camel_case( $field_group['title'] );
-
-			$field_group['type'] = 'group';
-			$field_group['name'] = $field_name;
-			$description         = $field_group['description'] ? $field_group['description'] . ' | ' : '';
-			$config              = [
-				'name'            => $field_name,
-				'description'     => $description . sprintf( __( 'Added to the GraphQL Schema because the ACF Field Group "%1$s" was assigned to an individual post of the post_type: "%2$s". The group will be present in the Schema for the "%3$s" Type, but will only resolve if the entity has content saved.', 'wp-graphql-acf' ), $field_group['title'], $post_type_object->name, $post_type_object->graphql_plural_name ),
-				'acf_field'       => $field_group,
-				'acf_field_group' => null,
-				'resolve'         => function( $root ) use ( $field_group ) {
-					return isset( $root ) ? $root : null;
-				}
-			];
-
-			$this->register_graphql_field( $post_type_object->graphql_single_name, $field_name, $config );
-
-		}
-
-	}
-
-	/**
-	 * Add field groups to users when assigned to user edit/register screens
-	 */
-	protected function add_acf_fields_to_users() {
+		// Get a unique list of groups that match the register and edit user location rules
+		$user_field_groups = array_merge( $user_edit_field_groups, $user_register_field_groups );
+		$user_field_groups = array_intersect_key( $user_field_groups, array_unique( array_map( 'serialize', $field_groups ) ) );
+		$func_push_type_key( $user_field_groups, 'user' );
 
 		/**
-		 * Get the field groups associated with the User edit form
+		 * Handle ACF Option Pages key
 		 */
-		$user_edit_field_groups = acf_get_field_groups( [
-			'user_form' => 'edit',
-		] );
-
-		/**
-		 * Get the field groups associated with the User register form
-		 */
-		$user_register_field_groups = acf_get_field_groups( [
-			'user_form' => 'register',
-		] );
-
-		/**
-		 * Get a unique list of groups that match the register and edit user location rules
-		 */
-		$field_groups = array_merge( $user_edit_field_groups, $user_register_field_groups );
-		$field_groups = array_intersect_key( $field_groups, array_unique( array_map( 'serialize', $field_groups ) ) );
-
-
-		foreach ( $field_groups as $field_group ) {
-
-			$field_name          = isset( $field_group['graphql_field_name'] ) ? $field_group['graphql_field_name'] : Config::camel_case( $field_group['title'] );
-			$field_group['type'] = 'group';
-			$field_group['name'] = $field_name;
-			$description         = $field_group['description'] ? $field_group['description'] . ' | ' : '';
-			$config              = [
-				'name'            => $field_name,
-				'description'     => $description . sprintf( __( 'Added to the GraphQL Schema because the ACF Field Group "%1$s" was assigned to Users edit or register form', 'wp-graphql-acf' ), $field_group['title'] ),
-				'acf_field'       => $field_group,
-				'acf_field_group' => null,
-				'resolve'         => function( $root ) use ( $field_group ) {
-					return isset( $root ) ? $root : null;
-				}
-			];
-
-			$this->register_graphql_field( 'User', $field_name, $config );
-
-
-		}
-
-	}
-
-	/**
-	 * Adds options pages and options page field groups to the schema.
-	 */
-	protected function add_acf_fields_to_options_pages() {
 		global $acf_options_page;
+		if ( isset( $acf_options_page ) ) {
 
-		if ( ! isset( $acf_options_page ) ) {
-			return ;
+			// Get a list of post types that have been registered to show in graphql
+			$graphql_options_pages = acf_get_options_pages();
+
+			// If there are no post types exposed to GraphQL, bail
+			if ( ! empty( $graphql_options_pages ) && is_array( $graphql_options_pages ) ) {
+				
+				// Loop over the post types exposed to GraphQL
+				foreach ( $graphql_options_pages as $options_page_key => $options_page ) {
+					if ( empty( $options_page['show_in_graphql'] ) ) {
+						continue;
+					}
+
+					// Get the field groups associated with the options page
+					$field_groups = acf_get_field_groups(
+						[
+							'options_page' => $options_page['menu_slug'],
+						]
+					);
+
+					$func_push_type_key( $field_groups, 'acf_options_page__' . $options_page['menu_slug'] );
+				}
+			}
 		}
 
 		/**
-		 * Get a list of post types that have been registered to show in graphql
+		 * Update field group data
 		 */
-		$graphql_options_pages = acf_get_options_pages();
-
-		/**
-		 * If there are no post types exposed to GraphQL, bail
-		 */
-		if ( empty( $graphql_options_pages ) || ! is_array( $graphql_options_pages ) ) {
-			return;
-		}
-
-		/**
-		 * Loop over the post types exposed to GraphQL
-		 */
-		foreach ( $graphql_options_pages as $options_page_key => $options_page ) {
-			if ( empty( $options_page['show_in_graphql'] ) ) {
-				continue;
-			}
-
-			/**
-			 * Get options page properties.
-			 */
-			$page_title = $options_page['page_title'];
-			$page_slug  = $options_page['menu_slug'];
-
-			/**
-			 * Get the field groups associated with the options page
-			 */
-			$field_groups = acf_get_field_groups(
-				[
-					'options_page' => $options_page['menu_slug'],
-				]
-			);
-
-			/**
-			 * If there are no field groups for this options page, move on to the next one.
-			 */
-			if ( empty( $field_groups ) || ! is_array( $field_groups ) ) {
-				continue;
-			}
-
-			/**
-			 * Loop over the field groups for this options page.
-			 */
-			$options_page_fields = array();
-			foreach ( $field_groups as $field_group ) {
-				$field_name = isset( $field_group['graphql_field_name'] ) ? $field_group['graphql_field_name'] : Config::camel_case( $field_group['title'] );
-
-				$field_group['type'] = 'group';
-				$field_group['name'] = $field_name;
-				$config              = [
-					'name'            => $field_name,
-					'description'     => $field_group['description'],
-					'acf_field'       => $field_group,
-					'acf_field_group' => null,
-					'resolve'         => function( $root ) use ( $field_group ) {
-						return isset( $root ) ? $root : null;
-					}
-				];
-
-				$options_page_fields[ $field_name ] = $config;
-
-			}
-
-			/**
-			 * Continue if no options to show in GraphQL
-			 */
-			if ( empty( $options_page_fields ) ) {
-				continue;
-			}
-
-			/**
-			 * Create field and type names. Use explicit graphql_field_name
-			 * if available and fallback to generating from title if not available.
-			 */
-			if ( ! empty( $options_page['graphql_field_name'] ) ) {
-				$field_name = $options_page['graphql_field_name'];
-				$type_name = ucfirst( $options_page['graphql_field_name'] );
-			} else {
-				$field_name = Config::camel_case( $page_title );
-				$type_name = ucfirst( Config::camel_case( $page_title ) );
-			}
-
-			/**
-			 * Register options page type to schema.
-			 */
-			register_graphql_object_type(
-				$type_name,
-				[
-					'description' => sprintf( __( '%s options', 'wp-graphql-acf' ), $page_title ),
-					'fields'      => [
-						'pageTitle' => [
-							'type'    => 'String',
-							'resolve' => function( $source ) use ( $page_title ) {
-								return ! empty( $page_title ) ? $page_title : null;
-							},
-						],
-						'pageSlug' => [
-							'type'    => 'String',
-							'resolve' => function( $source ) use ( $page_slug ) {
-								return ! empty( $page_slug ) ? $page_slug : null;
-							},
-						],
-					],
-				]
-			);
-
-			/**
-			 * Register options page type to the "RootQuery"
-			 */
-			$options_page['type'] = 'options_page';
-			register_graphql_field(
-				'RootQuery',
-				$field_name,
-				[
-					'type'        => $type_name,
-					'description' => sprintf( __( '%s options', 'wp-graphql-acf' ), $options_page['page_title'] ),
-					'resolve'     => function() use ( $options_page ) {
-						return ! empty( $options_page ) ? $options_page : null;
-					}
-				]
-			);
-
-			/**
-			 * Register option page fields to the option page type.
-			 */
-			foreach ( $options_page_fields as $name => $config ) {
-				$this->register_graphql_field( $type_name, $name, $config );
-			}
+		foreach ( $graphql_field_groups as $field_group ) {
+			acf_update_field_group( $field_group );
 		}
 	}
-
 }

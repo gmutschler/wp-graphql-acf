@@ -85,11 +85,6 @@ final class ACF {
 	 */
 	private function setup_constants() {
 
-		// Plugin version.
-		if ( ! defined( 'WPGRAPHQL_ACF_VERSION' ) ) {
-			define( 'WPGRAPHQL_ACF_VERSION', '0.3.0' );
-		}
-
 		// Plugin Folder Path.
 		if ( ! defined( 'WPGRAPHQL_ACF_PLUGIN_DIR' ) ) {
 			define( 'WPGRAPHQL_ACF_PLUGIN_DIR', plugin_dir_path( __FILE__ . '/..' ) );
